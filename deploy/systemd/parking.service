@@ -1,0 +1,23 @@
+[Unit]
+Description=Parking Monitor System
+After=network.target
+
+[Service]
+Type=simple
+User=parking
+Group=parking
+WorkingDirectory=/opt/parking-monitor
+Environment="PATH=/opt/parking-monitor/venv/bin"
+ExecStart=/opt/parking-monitor/venv/bin/python3 backend/app.py --host 0.0.0.0 --port 5000
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/parking-monitor/app.log
+StandardError=append:/var/log/parking-monitor/error.log
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

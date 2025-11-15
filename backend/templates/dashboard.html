@@ -1,0 +1,666 @@
+{% extends "base.html" %}
+
+{% block title %}Панель управления - Мониторинг Парковки{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Обзор парковочных зон</h2>
+    <div id="spaces-grid" class="grid"></div>
+</div>
+
+<div class="card">
+    <h2>Детали зоны</h2>
+    <select id="space-select" class="form-control" style="max-width: 400px; margin-bottom: 1rem;">
+        <option value="">Выберите зону...</option>
+    </select>
+    
+    <div id="space-details" style="display: none;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+            <div>
+                <h3 style="margin-bottom: 0.5rem;">Статистика</h3>
+                <div id="space-stats"></div>
+            </div>
+            <div>
+                <div style="margin-bottom: 1rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="video-mode-toggle" onchange="toggleVideoMode()" 
+                               style="width: auto; margin-right: 0.5rem;">
+                        <strong>Видеопоток в реальном времени</strong>
+                    </label>
+                    <small style="color: #666; margin-left: 1.5rem;">
+                        Отключите для экономии трафика (будут статичные снимки каждые 10 сек)
+                    </small>
+                </div>
+                
+                <div id="image-container" style="position: relative;">
+                    <img id="space-image" src="" alt="Вид зоны" style="width: 100%; border-radius: 4px; display: none;" 
+                         onerror="handleImageError(this)">
+                    <img id="space-video" src="" alt="Видеопоток зоны" style="width: 100%; border-radius: 4px; display: none;">
+                    <canvas id="image-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none;"></canvas>
+                    <div id="image-loading" style="display: none; text-align: center; padding: 50px; background: #f5f5f5; border-radius: 4px;">
+                        <p>Загрузка...</p>
+                    </div>
+                    <div id="image-error" style="display: none; text-align: center; padding: 50px; background: #ffe6e6; border-radius: 4px; color: #c00;">
+                        <p>Изображение недоступно</p>
+                        <button class="btn" onclick="retryLoadImage()" style="margin-top: 10px;">Повторить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <h3 style="margin-bottom: 0.5rem;">Парковочные места</h3>
+        <div id="spots-table"></div>
+        
+        <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">План парковки</h3>
+        <div id="parking-plan-view" style="display: none;">
+            <div style="position: relative; border: 2px solid #ddd; background: #f8f9fa; min-height: 300px;">
+                <img id="plan-view-image" src="" alt="План парковки" style="max-width: 100%; display: none;">
+                <canvas id="plan-view-canvas" style="position: absolute; top: 0; left: 0; pointer-events: none; display: none;"></canvas>
+                <div id="plan-view-placeholder" style="text-align: center; padding: 50px; color: #666;">
+                    <p>План парковки не загружен</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+let currentSpaceId = null;
+let eventSource = null;
+
+// Connect to SSE for real-time updates
+function connectSSE() {
+    eventSource = new EventSource('/api/events');
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('SSE Event:', data);
+        
+        if (data.type === 'spot_update' || data.type === 'bulk_update') {
+            loadSpaces();
+            if (currentSpaceId) {
+                loadSpaceDetails(currentSpaceId);
+                // Update parking plan view
+                initializePlanViewCanvas(currentSpaceId);
+            }
+        }
+    };
+    
+    eventSource.onerror = function(error) {
+        console.error('SSE Error:', error);
+        setTimeout(connectSSE, 5000);
+    };
+}
+
+async function loadSpaces() {
+    try {
+        const data = await apiRequest('/api/state');
+        const spacesGrid = document.getElementById('spaces-grid');
+        const spaceSelect = document.getElementById('space-select');
+        
+        // Update grid
+        spacesGrid.innerHTML = data.spaces.map(space => `
+            <div class="card" style="margin: 0;">
+                <h3>${space.name}</h3>
+                <p style="margin: 0.5rem 0;">
+                    <span class="status-badge status-free">Свободно: ${space.free_spots}</span>
+                    <span class="status-badge status-occupied">Занято: ${space.occupied_spots}</span>
+                </p>
+                <p style="margin: 0.5rem 0; color: #666;">Всего: ${space.total_spots} мест</p>
+                <button class="btn" onclick="selectSpace('${space.id}')">Подробнее</button>
+            </div>
+        `).join('');
+        
+        // Update select
+        const currentOptions = Array.from(spaceSelect.options).map(o => o.value);
+        const newOptions = data.spaces.map(s => s.id);
+        
+        if (JSON.stringify(currentOptions.slice(1)) !== JSON.stringify(newOptions)) {
+            spaceSelect.innerHTML = '<option value="">Выберите зону...</option>' +
+                data.spaces.map(space => 
+                    `<option value="${space.id}">${space.name}</option>`
+                ).join('');
+        }
+    } catch (error) {
+        showAlert('Ошибка загрузки зон: ' + error.message, 'error');
+    }
+}
+
+async function loadSpaceDetails(spaceId) {
+    try {
+        const data = await apiRequest(`/api/state/spaces/${spaceId}`);
+        const detailsDiv = document.getElementById('space-details');
+        const statsDiv = document.getElementById('space-stats');
+        const spotsTable = document.getElementById('spots-table');
+        const spaceImage = document.getElementById('space-image');
+        
+        detailsDiv.style.display = 'block';
+        
+        // Update stats
+        statsDiv.innerHTML = `
+            <p><strong>Всего мест:</strong> ${data.summary.total_spots}</p>
+            <p><strong>Свободно:</strong> <span class="status-badge status-free">${data.summary.free_spots}</span></p>
+            <p><strong>Занято:</strong> <span class="status-badge status-occupied">${data.summary.occupied_spots}</span></p>
+        `;
+        
+        // Update image/video based on mode
+        const isVideoMode = document.getElementById('video-mode-toggle').checked;
+        if (isVideoMode) {
+            loadSpaceVideo(spaceId);
+        } else {
+            loadSpaceImage(spaceId);
+        }
+        
+        // Update spots table
+        const parkingSpots = data.spots.filter(s => s.type === 'parking');
+        
+        // Store spots data for highlighting
+        window.currentSpots = data.spots;
+        
+        if (parkingSpots.length > 0) {
+            spotsTable.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Метка</th>
+                            <th>Статус</th>
+                            <th>№ последовательности</th>
+                            <th>Занято с</th>
+                            <th>Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${parkingSpots.map(spot => `
+                            <tr id="spot-row-${spot.id}" 
+                                data-spot-id="${spot.id}"
+                                onmouseenter="highlightSpot('${spot.id}', true)"
+                                onmouseleave="highlightSpot('${spot.id}', false)"
+                                onclick="selectSpot('${spot.id}')"
+                                style="cursor: pointer;">
+                                <td><strong>${spot.label}</strong></td>
+                                <td>
+                                    <span class="status-badge ${spot.occupied ? 'status-occupied' : 'status-free'}">
+                                        ${spot.occupied ? '🔴 Занято' : '🟢 Свободно'}
+                                    </span>
+                                </td>
+                                <td>${spot.sequential_number || '-'}</td>
+                                <td>${spot.occupied_since ? new Date(spot.occupied_since).toLocaleString('ru-RU') : '-'}</td>
+                                <td>
+                                    <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.875rem;" 
+                                            onclick="event.stopPropagation(); excludeSpot('${spot.id}')">
+                                        Исключить
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            spotsTable.innerHTML = '<p>Парковочные места для этой зоны не настроены.</p>';
+        }
+        
+        // Initialize canvas overlay after table is rendered
+        initializeCanvasOverlay();
+        
+        // Load parking plan
+        loadParkingPlan(spaceId);
+    } catch (error) {
+        showAlert('Ошибка загрузки деталей зоны: ' + error.message, 'error');
+    }
+}
+
+async function loadParkingPlan(spaceId) {
+    const planView = document.getElementById('parking-plan-view');
+    
+    try {
+        const planData = await apiRequest(`/api/spaces/${spaceId}/top-view-plan`);
+        
+        if (planData.top_view_image) {
+            planView.style.display = 'block';
+            const img = document.getElementById('plan-view-image');
+            img.src = `/api/spaces/${spaceId}/top-view-plan/image?t=${Date.now()}`;
+            img.style.display = 'block';
+            img.onload = () => {
+                initializePlanViewCanvas(spaceId);
+            };
+            document.getElementById('plan-view-placeholder').style.display = 'none';
+        } else {
+            planView.style.display = 'none';
+        }
+    } catch (error) {
+        // Plan doesn't exist, hide view
+        planView.style.display = 'none';
+    }
+}
+
+async function initializePlanViewCanvas(spaceId) {
+    const img = document.getElementById('plan-view-image');
+    const canvas = document.getElementById('plan-view-canvas');
+    
+    if (!img.complete || img.naturalWidth === 0) return;
+    
+    canvas.width = img.offsetWidth;
+    canvas.height = img.offsetHeight;
+    canvas.style.display = 'block';
+    
+    try {
+        // Get plan data and spots
+        const planData = await apiRequest(`/api/spaces/${spaceId}/top-view-plan`);
+        const spotsData = await apiRequest(`/api/state/spaces/${spaceId}`);
+        
+        const spots = spotsData.spots || [];
+        const mappings = planData.top_view_spots || [];
+        
+        drawPlanViewSpots(canvas, img, mappings, spots);
+    } catch (error) {
+        console.error('Error loading plan view:', error);
+    }
+}
+
+function drawPlanViewSpots(canvas, img, mappings, spots) {
+    const ctx = canvas.getContext('2d');
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const imgWidth = img.naturalWidth;
+    const imgHeight = img.naturalHeight;
+    const scaleX = canvas.width / imgWidth;
+    const scaleY = canvas.height / imgHeight;
+    
+    // Create spot lookup
+    const spotLookup = {};
+    spots.forEach(spot => {
+        spotLookup[spot.id] = spot;
+    });
+    
+    mappings.forEach(mapping => {
+        const spot = spotLookup[mapping.spot_id];
+        if (!spot) return;
+        
+        const x = mapping.plan_coords.x * imgWidth * scaleX;
+        const y = mapping.plan_coords.y * imgHeight * scaleY;
+        
+        // Standard spot size
+        const width = 60 * scaleX;
+        const height = 100 * scaleY;
+        
+        // Color based on occupancy
+        let color = '#27ae60'; // Green - free
+        if (spot.type === 'nopark') {
+            color = '#e74c3c'; // Red - no park
+        } else if (spot.occupied) {
+            color = '#c0392b'; // Dark red - occupied
+        }
+        
+        // Draw rectangle
+        ctx.fillStyle = color + '80'; // Semi-transparent
+        ctx.fillRect(x - width/2, y - height/2, width, height);
+        
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x - width/2, y - height/2, width, height);
+        
+        // Draw label
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        const label = spot.label;
+        ctx.strokeText(label, x, y);
+        ctx.fillText(label, x, y);
+    });
+}
+
+function selectSpace(spaceId) {
+    currentSpaceId = spaceId;
+    document.getElementById('space-select').value = spaceId;
+    loadSpaceDetails(spaceId);
+}
+
+document.getElementById('space-select').addEventListener('change', function() {
+    const spaceId = this.value;
+    if (spaceId) {
+        selectSpace(spaceId);
+    } else {
+        document.getElementById('space-details').style.display = 'none';
+        currentSpaceId = null;
+    }
+});
+
+// Initial load
+loadSpaces();
+connectSSE();
+
+// Track if page is visible
+let isPageVisible = !document.hidden;
+document.addEventListener('visibilitychange', () => {
+    isPageVisible = !document.hidden;
+    if (isPageVisible && currentSpaceId) {
+        // Reload image when page becomes visible
+        loadSpaceImage(currentSpaceId);
+    }
+});
+
+function handleImageError(img) {
+    console.error('Failed to load image:', img.src);
+    document.getElementById('space-image').style.display = 'none';
+    document.getElementById('image-loading').style.display = 'none';
+    document.getElementById('image-error').style.display = 'block';
+}
+
+function retryLoadImage() {
+    if (currentSpaceId) {
+        loadSpaceImage(currentSpaceId);
+    }
+}
+
+function toggleVideoMode() {
+    const isVideoMode = document.getElementById('video-mode-toggle').checked;
+    
+    if (currentSpaceId) {
+        if (isVideoMode) {
+            loadSpaceVideo(currentSpaceId);
+        } else {
+            loadSpaceImage(currentSpaceId);
+        }
+    }
+}
+
+function loadSpaceVideo(spaceId) {
+    const img = document.getElementById('space-image');
+    const video = document.getElementById('space-video');
+    const loading = document.getElementById('image-loading');
+    const error = document.getElementById('image-error');
+    
+    // Скрыть статичное изображение
+    img.style.display = 'none';
+    error.style.display = 'none';
+    loading.style.display = 'block';
+    
+    // Установить видеопоток
+    video.src = `/api/video/space/${spaceId}`;
+    
+    video.onload = function() {
+        loading.style.display = 'none';
+        video.style.display = 'block';
+    };
+    
+    // Показать через небольшую задержку
+    setTimeout(() => {
+        loading.style.display = 'none';
+        video.style.display = 'block';
+        // Reinitialize overlay after video loads
+        setTimeout(initializeCanvasOverlay, 100);
+    }, 500);
+}
+
+function loadSpaceImage(spaceId) {
+    const img = document.getElementById('space-image');
+    const video = document.getElementById('space-video');
+    const loading = document.getElementById('image-loading');
+    const error = document.getElementById('image-error');
+    
+    // Скрыть видео
+    video.style.display = 'none';
+    video.src = '';
+    
+    // Show loading
+    img.style.display = 'none';
+    error.style.display = 'none';
+    loading.style.display = 'block';
+    
+    // Set new source
+    img.onload = function() {
+        loading.style.display = 'none';
+        error.style.display = 'none';
+        img.style.display = 'block';
+        // Reinitialize overlay after image loads
+        setTimeout(initializeCanvasOverlay, 100);
+    };
+    
+    img.src = `/api/snapshot/space/${spaceId}?annotated=true&t=${Date.now()}`;
+}
+
+// Periodic refresh for static image mode only (increased to 10 seconds)
+setInterval(() => {
+    const isVideoMode = document.getElementById('video-mode-toggle').checked;
+    
+    if (currentSpaceId && isPageVisible && !isVideoMode) {
+        loadSpaceImage(currentSpaceId);
+    }
+}, 10000);
+
+// Highlighting functionality
+let selectedSpotId = null;
+let hoveredSpotId = null;
+
+function highlightSpot(spotId, isHover) {
+    if (isHover) {
+        hoveredSpotId = spotId;
+    } else {
+        hoveredSpotId = null;
+    }
+    updateSpotHighlight();
+}
+
+function selectSpot(spotId) {
+    selectedSpotId = selectedSpotId === spotId ? null : spotId;
+    updateSpotHighlight();
+    
+    // Scroll to row if needed
+    const row = document.getElementById(`spot-row-${spotId}`);
+    if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+function updateSpotHighlight() {
+    if (!window.currentSpots) return;
+    
+    // Update table rows
+    window.currentSpots.forEach(spot => {
+        const row = document.getElementById(`spot-row-${spot.id}`);
+        if (row) {
+            const isSelected = selectedSpotId === spot.id;
+            const isHovered = hoveredSpotId === spot.id;
+            
+            if (isSelected) {
+                row.style.backgroundColor = '#e3f2fd';
+                row.style.fontWeight = 'bold';
+            } else if (isHovered) {
+                row.style.backgroundColor = '#f0f0f0';
+                row.style.fontWeight = 'normal';
+            } else {
+                row.style.backgroundColor = '';
+                row.style.fontWeight = 'normal';
+            }
+        }
+    });
+    
+    // Update canvas overlay
+    drawCanvasOverlay();
+}
+
+function initializeCanvasOverlay() {
+    const overlay = document.getElementById('image-overlay');
+    const img = document.getElementById('space-image');
+    const video = document.getElementById('space-video');
+    
+    const updateOverlay = () => {
+        const source = img.style.display !== 'none' ? img : video;
+        const isImage = source === img;
+        const isReady = isImage ? source.complete && source.naturalWidth > 0 : video.readyState >= 2;
+        
+        if (source && isReady) {
+            overlay.style.display = 'block';
+            overlay.width = source.offsetWidth;
+            overlay.height = source.offsetHeight;
+            overlay.style.pointerEvents = 'auto';
+            overlay.style.cursor = 'pointer';
+            drawCanvasOverlay();
+        }
+    };
+    
+    img.addEventListener('load', updateOverlay);
+    video.addEventListener('loadeddata', updateOverlay);
+    
+    // Make canvas interactive
+    overlay.addEventListener('mousemove', handleCanvasMouseMove);
+    overlay.addEventListener('click', handleCanvasClick);
+    overlay.addEventListener('mouseleave', () => {
+        hoveredSpotId = null;
+        updateSpotHighlight();
+    });
+    
+    // Initial update
+    setTimeout(updateOverlay, 100);
+}
+
+function drawCanvasOverlay() {
+    const overlay = document.getElementById('image-overlay');
+    const ctx = overlay.getContext('2d');
+    const img = document.getElementById('space-image');
+    const video = document.getElementById('space-video');
+    
+    const source = img.style.display !== 'none' ? img : video;
+    const isImage = source === img;
+    const isReady = isImage ? img.complete && img.naturalWidth > 0 : video.readyState >= 2;
+    
+    if (!window.currentSpots || !isReady || !source || source.offsetWidth === 0) return;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    
+    // Calculate scale - для изображения используем naturalWidth, для видео - offsetWidth
+    const sourceWidth = isImage ? source.naturalWidth : source.videoWidth || source.offsetWidth;
+    const sourceHeight = isImage ? source.naturalHeight : source.videoHeight || source.offsetHeight;
+    const scaleX = overlay.width / sourceWidth;
+    const scaleY = overlay.height / sourceHeight;
+    
+    window.currentSpots.forEach(spot => {
+        if (!spot.rect) return;
+        
+        const isSelected = selectedSpotId === spot.id;
+        const isHovered = hoveredSpotId === spot.id;
+        const shouldHighlight = isSelected || isHovered;
+        
+        const x1 = spot.rect.x1 * scaleX;
+        const y1 = spot.rect.y1 * scaleY;
+        const x2 = spot.rect.x2 * scaleX;
+        const y2 = spot.rect.y2 * scaleY;
+        const width = x2 - x1;
+        const height = y2 - y1;
+        
+        // Draw highlight
+        if (shouldHighlight) {
+            // Glow effect
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = isSelected ? '#2196F3' : '#FFC107';
+            
+            // Thicker border
+            ctx.strokeStyle = isSelected ? '#2196F3' : '#FFC107';
+            ctx.lineWidth = isSelected ? 5 : 3;
+            ctx.strokeRect(x1, y1, width, height);
+            
+            // Semi-transparent fill
+            ctx.fillStyle = isSelected ? 'rgba(33, 150, 243, 0.2)' : 'rgba(255, 193, 7, 0.15)';
+            ctx.fillRect(x1, y1, width, height);
+            
+            ctx.shadowBlur = 0;
+        }
+        
+        // Draw label with larger font if highlighted
+        if (shouldHighlight) {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 4;
+            ctx.font = 'bold 18px Arial';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            
+            const label = spot.label;
+            const textX = x1;
+            const textY = y1 - 25;
+            
+            ctx.strokeText(label, textX, textY);
+            ctx.fillText(label, textX, textY);
+        }
+    });
+}
+
+function handleCanvasMouseMove(event) {
+    const overlay = document.getElementById('image-overlay');
+    const rect = overlay.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    const img = document.getElementById('space-image');
+    const video = document.getElementById('space-video');
+    const source = img.style.display !== 'none' ? img : video;
+    
+    if (!source || !window.currentSpots) return;
+    
+    const isImage = source === img;
+    const sourceWidth = isImage ? source.naturalWidth : source.videoWidth || source.offsetWidth;
+    const sourceHeight = isImage ? source.naturalHeight : source.videoHeight || source.offsetHeight;
+    const scaleX = overlay.width / sourceWidth;
+    const scaleY = overlay.height / sourceHeight;
+    
+    // Find which spot is under cursor
+    let foundSpot = null;
+    for (const spot of window.currentSpots) {
+        if (!spot.rect) continue;
+        
+        const x1 = spot.rect.x1 * scaleX;
+        const y1 = spot.rect.y1 * scaleY;
+        const x2 = spot.rect.x2 * scaleX;
+        const y2 = spot.rect.y2 * scaleY;
+        
+        if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
+            foundSpot = spot.id;
+            break;
+        }
+    }
+    
+    if (foundSpot !== hoveredSpotId) {
+        hoveredSpotId = foundSpot;
+        updateSpotHighlight();
+    }
+}
+
+function handleCanvasClick(event) {
+    if (hoveredSpotId) {
+        selectSpot(hoveredSpotId);
+    }
+}
+
+async function excludeSpot(spotId) {
+    if (!confirm('Исключить это парковочное место? Оно будет помечено как запрещенное для парковки.')) {
+        return;
+    }
+    
+    try {
+        await apiRequest(`/api/spots/${spotId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ type: 'nopark' })
+        });
+        
+        showAlert('Место исключено', 'success');
+        
+        // Reload space details
+        if (currentSpaceId) {
+            loadSpaceDetails(currentSpaceId);
+        }
+    } catch (error) {
+        showAlert('Ошибка исключения места: ' + error.message, 'error');
+    }
+}
+</script>
+{% endblock %}
+

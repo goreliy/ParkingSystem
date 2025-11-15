@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+
+{% block title %}Автоматическая разметка - Мониторинг Парковки{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>🤖 Автоматическая разметка парковочных мест</h2>
+    <p>Используйте AI для автоматического определения парковочных мест на основе детекции транспорта.</p>
+</div>
+
+<div class="card">
+    <h2>Шаг 1: Выбор зоны и режима анализа</h2>
+    
+    <div class="form-group">
+        <label>Парковочная зона</label>
+        <select id="space-select" class="form-control">
+            <option value="">Выберите зону...</option>
+        </select>
+    </div>
+    
+    <div class="form-group">
+        <label>Режим анализа</label>
+        <select id="analysis-mode" class="form-control">
+            <option value="single">🚀 Быстрый (1 кадр, ~1 сек)</option>
+            <option value="average" selected>⚡ Усредненный (30 сек, стабильные позиции)</option>
+            <option value="duration">🔬 Глубокий (настраиваемая длительность)</option>
+        </select>
+    </div>
+    
+    <div id="duration-settings" style="display: none;">
+        <div class="form-group">
+            <label>Длительность анализа (секунды)</label>
+            <input type="number" id="duration-seconds" min="60" max="600" value="120">
+            <small style="color: #666;">60-600 секунд (1-10 минут)</small>
+        </div>
+    </div>
+    
+    <div class="form-group">
+        <label>Запас по ширине (%)</label>
+        <input type="number" id="spot-width" min="100" max="200" value="120" step="5">
+        <small style="color: #666;">100% = точно по машине, 120% = +20% запас (рекомендуется)</small>
+    </div>
+    
+    <div class="form-group">
+        <label>Запас по высоте (%)</label>
+        <input type="number" id="spot-height" min="100" max="200" value="120" step="5">
+        <small style="color: #666;">100% = точно по машине, 120% = +20% запас (рекомендуется)</small>
+    </div>
+    
+    <div class="form-group">
+        <label>Минимальное время стабильности (секунды)</label>
+        <input type="number" id="stability-seconds" min="10" max="120" value="30">
+        <small style="color: #666;">Как долго машина должна стоять неподвижно</small>
+    </div>
+    
+    <button class="btn btn-success" onclick="startAnalysis()">Запустить анализ</button>
+</div>
+
+<div id="analysis-progress" class="card" style="display: none;">
+    <h2>Анализ в процессе...</h2>
+    
+    <div style="margin-bottom: 1rem;">
+        <div style="background: #e0e0e0; border-radius: 4px; height: 30px; position: relative; overflow: hidden;">
+            <div id="progress-bar" style="background: #27ae60; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: bold;">
+                <span id="progress-text">0%</span>
+            </div>
+        </div>
+    </div>
+    
+    <p><strong>Статус:</strong> <span id="status-text">Анализ...</span></p>
+    <p><strong>Кадров проанализировано:</strong> <span id="frames-count">0</span></p>
+    <p><strong>Найдено машин:</strong> <span id="vehicles-count">0</span></p>
+    
+    <button class="btn btn-danger" onclick="cancelAnalysis()">Отменить</button>
+</div>
+
+<div id="proposals-section" class="card" style="display: none;">
+    <h2>Шаг 2: Просмотр и подтверждение предложений</h2>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+        <div>
+            <h3>Предварительный просмотр</h3>
+            <img id="preview-image" src="" alt="Предпросмотр" style="width: 100%; border: 1px solid #ddd; border-radius: 4px;">
+            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: #666;">
+                🟢 Зеленые - одобренные места<br>
+                🔴 Красные - исключенные места
+            </p>
+        </div>
+        
+        <div>
+            <h3>Список предложений (<span id="proposals-count">0</span>)</h3>
+            <div style="margin-bottom: 1rem;">
+                <button class="btn" onclick="selectAllProposals()">Выбрать все</button>
+                <button class="btn" onclick="deselectAllProposals()">Снять все</button>
+            </div>
+            
+            <div id="proposals-list" style="max-height: 500px; overflow-y: auto;"></div>
+        </div>
+    </div>
+    
+    <div style="border-top: 1px solid #ddd; padding-top: 1rem;">
+        <h3>Шаг 3: Настройки создания мест</h3>
+        
+        <div class="form-group">
+            <label>Префикс меток</label>
+            <input type="text" id="label-prefix" value="A" maxlength="3" style="max-width: 100px;">
+            <small style="color: #666;">Например: A для A1, A2, A3...</small>
+        </div>
+        
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="auto-number" checked style="width: auto; margin-right: 0.5rem;">
+                Использовать сквозную нумерацию
+            </label>
+            <small style="color: #666; display: block; margin-left: 1.5rem;">
+                Места будут пронумерованы последовательно с учетом существующих
+            </small>
+        </div>
+        
+        <p><strong>Будет создано мест:</strong> <span id="approved-count">0</span></p>
+        
+        <button class="btn btn-success" onclick="applyProposals()" style="margin-right: 0.5rem;">
+            Создать выбранные места
+        </button>
+        <button class="btn" onclick="resetAnalysis()">
+            Новый анализ
+        </button>
+    </div>
+</div>
+
+<div id="success-section" class="card" style="display: none;">
+    <h2>✅ Парковочные места успешно созданы!</h2>
+    <p><strong>Создано мест:</strong> <span id="created-count">0</span></p>
+    <p><strong>ID мест:</strong> <span id="created-ids" style="font-family: monospace; font-size: 0.875rem;"></span></p>
+    
+    <div style="margin-top: 1.5rem;">
+        <a href="/dashboard" class="btn btn-success">Перейти к панели управления</a>
+        <a href="/setup" class="btn">Вернуться к настройке</a>
+        <button class="btn" onclick="resetAnalysis()">Создать еще места</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+let currentSessionId = null;
+let progressInterval = null;
+let proposals = [];
+
+// Загрузить список зон
+async function loadSpaces() {
+    try {
+        const data = await apiRequest('/api/spaces');
+        const select = document.getElementById('space-select');
+        
+        select.innerHTML = '<option value="">Выберите зону...</option>' +
+            data.spaces.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    } catch (error) {
+        showAlert('Ошибка загрузки зон: ' + error.message, 'error');
+    }
+}
+
+// Обработка изменения режима
+document.getElementById('analysis-mode').addEventListener('change', function() {
+    const mode = this.value;
+    document.getElementById('duration-settings').style.display = 
+        mode === 'duration' ? 'block' : 'none';
+});
+
+async function startAnalysis() {
+    const spaceId = document.getElementById('space-select').value;
+    const mode = document.getElementById('analysis-mode').value;
+    const spotWidth = parseInt(document.getElementById('spot-width').value);
+    const spotHeight = parseInt(document.getElementById('spot-height').value);
+    const stabilitySeconds = parseInt(document.getElementById('stability-seconds').value);
+    const durationSeconds = parseInt(document.getElementById('duration-seconds').value);
+    
+    if (!spaceId) {
+        showAlert('Пожалуйста, выберите зону', 'error');
+        return;
+    }
+    
+    try {
+        // Скрыть предыдущие результаты
+        document.getElementById('proposals-section').style.display = 'none';
+        document.getElementById('success-section').style.display = 'none';
+        
+        // Показать прогресс
+        document.getElementById('analysis-progress').style.display = 'block';
+        document.getElementById('progress-bar').style.width = '0%';
+        document.getElementById('progress-text').textContent = '0%';
+        
+        // Запустить анализ
+        const response = await apiRequest('/api/auto-markup/start', {
+            method: 'POST',
+            body: JSON.stringify({
+                space_id: spaceId,
+                mode: mode,
+                duration_seconds: durationSeconds,
+                standard_spot_width: spotWidth,
+                standard_spot_height: spotHeight,
+                stability_seconds: stabilitySeconds
+            })
+        });
+        
+        currentSessionId = response.session_id;
+        
+        // Начать опрос прогресса
+        progressInterval = setInterval(checkProgress, 1000);
+        
+    } catch (error) {
+        showAlert('Ошибка запуска анализа: ' + error.message, 'error');
+        document.getElementById('analysis-progress').style.display = 'none';
+    }
+}
+
+async function checkProgress() {
+    if (!currentSessionId) return;
+    
+    try {
+        const progress = await apiRequest(`/api/auto-markup/progress/${currentSessionId}`);
+        
+        document.getElementById('progress-bar').style.width = progress.progress + '%';
+        document.getElementById('progress-text').textContent = progress.progress + '%';
+        document.getElementById('frames-count').textContent = progress.frames_analyzed;
+        document.getElementById('vehicles-count').textContent = progress.vehicles_found;
+        document.getElementById('status-text').textContent = 
+            progress.status === 'analyzing' ? 'Анализ...' :
+            progress.status === 'completed' ? 'Завершено!' :
+            progress.status === 'error' ? 'Ошибка: ' + progress.error_message :
+            'Отменено';
+        
+        if (progress.status === 'completed') {
+            clearInterval(progressInterval);
+            progressInterval = null;
+            await loadProposals();
+        } else if (progress.status === 'error' || progress.status === 'cancelled') {
+            clearInterval(progressInterval);
+            progressInterval = null;
+            showAlert('Анализ завершился с ошибкой или был отменен', 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error checking progress:', error);
+    }
+}
+
+async function loadProposals() {
+    if (!currentSessionId) return;
+    
+    try {
+        const data = await apiRequest(`/api/auto-markup/proposals/${currentSessionId}`);
+        
+        proposals = data.proposals;
+        
+        // Скрыть прогресс, показать предложения
+        document.getElementById('analysis-progress').style.display = 'none';
+        document.getElementById('proposals-section').style.display = 'block';
+        
+        // Загрузить превью изображение
+        document.getElementById('preview-image').src = 
+            `/api/auto-markup/preview/${currentSessionId}?t=${Date.now()}`;
+        
+        // Отобразить список предложений
+        renderProposalsList();
+        
+    } catch (error) {
+        showAlert('Ошибка загрузки предложений: ' + error.message, 'error');
+    }
+}
+
+function renderProposalsList() {
+    const container = document.getElementById('proposals-list');
+    document.getElementById('proposals-count').textContent = proposals.length;
+    
+    if (proposals.length === 0) {
+        container.innerHTML = '<p>Не найдено парковочных мест. Попробуйте другой режим анализа.</p>';
+        return;
+    }
+    
+    container.innerHTML = proposals.map((proposal, idx) => `
+        <div class="proposal-item" style="padding: 0.75rem; border: 1px solid ${proposal.is_valid ? '#27ae60' : '#e74c3c'}; 
+                                          border-radius: 4px; margin-bottom: 0.5rem; background: ${proposal.is_valid ? '#f0fff0' : '#fff0f0'};">
+            <label style="display: flex; align-items: center; cursor: pointer;">
+                <input type="checkbox" 
+                       id="proposal-${idx}" 
+                       ${proposal.is_valid ? 'checked' : ''} 
+                       onchange="toggleProposal(${idx}, this.checked)"
+                       style="width: auto; margin-right: 0.5rem;">
+                <div style="flex: 1;">
+                    <strong>Место ${proposal.suggested_label}</strong>
+                    <br>
+                    <small>
+                        Уверенность: ${(proposal.confidence * 100).toFixed(0)}% | 
+                        Стабильность: ${(proposal.stability_score * 100).toFixed(0)}%
+                        ${proposal.exclude_reason ? `<br><span style="color: #e74c3c;">⚠️ ${proposal.exclude_reason}</span>` : ''}
+                    </small>
+                </div>
+                <button class="btn ${proposal.is_valid ? 'btn-danger' : 'btn-success'}" 
+                        onclick="event.stopPropagation(); excludeProposal(${idx}, ${!proposal.is_valid})"
+                        style="margin-left: 0.5rem;">
+                    ${proposal.is_valid ? 'Исключить' : 'Включить'}
+                </button>
+            </label>
+        </div>
+    `).join('');
+    
+    updateApprovedCount();
+}
+
+function toggleProposal(index, checked) {
+    proposals[index].is_valid = checked;
+    updateApprovedCount();
+}
+
+async function excludeProposal(index, include) {
+    try {
+        const reason = include ? null : 'Исключено пользователем';
+        
+        await apiRequest(`/api/auto-markup/toggle-proposal/${currentSessionId}/${index}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                is_valid: include,
+                exclude_reason: reason
+            })
+        });
+        
+        proposals[index].is_valid = include;
+        proposals[index].exclude_reason = reason;
+        
+        renderProposalsList();
+        
+        // Обновить превью
+        document.getElementById('preview-image').src = 
+            `/api/auto-markup/preview/${currentSessionId}?t=${Date.now()}`;
+        
+    } catch (error) {
+        showAlert('Ошибка обновления предложения: ' + error.message, 'error');
+    }
+}
+
+function selectAllProposals() {
+    proposals.forEach((p, idx) => {
+        if (p.is_valid) {
+            const checkbox = document.getElementById(`proposal-${idx}`);
+            if (checkbox) checkbox.checked = true;
+        }
+    });
+    updateApprovedCount();
+}
+
+function deselectAllProposals() {
+    proposals.forEach((p, idx) => {
+        const checkbox = document.getElementById(`proposal-${idx}`);
+        if (checkbox) checkbox.checked = false;
+    });
+    updateApprovedCount();
+}
+
+function updateApprovedCount() {
+    const approved = proposals.filter((p, idx) => {
+        const checkbox = document.getElementById(`proposal-${idx}`);
+        return checkbox && checkbox.checked;
+    }).length;
+    
+    document.getElementById('approved-count').textContent = approved;
+}
+
+async function applyProposals() {
+    if (!currentSessionId) return;
+    
+    const approvedIndices = [];
+    proposals.forEach((p, idx) => {
+        const checkbox = document.getElementById(`proposal-${idx}`);
+        if (checkbox && checkbox.checked) {
+            approvedIndices.push(idx);
+        }
+    });
+    
+    if (approvedIndices.length === 0) {
+        showAlert('Пожалуйста, выберите хотя бы одно место', 'error');
+        return;
+    }
+    
+    if (!confirm(`Создать ${approvedIndices.length} парковочных мест?`)) {
+        return;
+    }
+    
+    try {
+        const labelPrefix = document.getElementById('label-prefix').value;
+        const autoNumber = document.getElementById('auto-number').checked;
+        
+        const result = await apiRequest('/api/auto-markup/apply', {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                approved_indices: approvedIndices,
+                label_prefix: labelPrefix,
+                auto_number: autoNumber
+            })
+        });
+        
+        // Показать результат
+        document.getElementById('proposals-section').style.display = 'none';
+        document.getElementById('success-section').style.display = 'block';
+        document.getElementById('created-count').textContent = result.created_spots;
+        document.getElementById('created-ids').textContent = result.spot_ids.join(', ');
+        
+        showAlert(`Успешно создано ${result.created_spots} парковочных мест!`, 'success');
+        
+    } catch (error) {
+        showAlert('Ошибка создания мест: ' + error.message, 'error');
+    }
+}
+
+async function cancelAnalysis() {
+    if (!currentSessionId) return;
+    
+    try {
+        await apiRequest(`/api/auto-markup/cancel/${currentSessionId}`, {
+            method: 'DELETE'
+        });
+        
+        if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+        }
+        
+        document.getElementById('analysis-progress').style.display = 'none';
+        showAlert('Анализ отменен', 'success');
+        
+        currentSessionId = null;
+        
+    } catch (error) {
+        showAlert('Ошибка отмены анализа: ' + error.message, 'error');
+    }
+}
+
+function resetAnalysis() {
+    currentSessionId = null;
+    proposals = [];
+    
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+    
+    document.getElementById('analysis-progress').style.display = 'none';
+    document.getElementById('proposals-section').style.display = 'none';
+    document.getElementById('success-section').style.display = 'none';
+    
+    // Сбросить форму
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-text').textContent = '0%';
+    document.getElementById('frames-count').textContent = '0';
+    document.getElementById('vehicles-count').textContent = '0';
+}
+
+// Инициализация
+loadSpaces();
+</script>
+{% endblock %}
+
+<style>
+.proposal-item {
+    transition: all 0.2s;
+}
+
+.proposal-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+</style>
+

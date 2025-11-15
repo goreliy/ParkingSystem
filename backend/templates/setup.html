@@ -1,0 +1,1382 @@
+{% extends "base.html" %}
+
+{% block title %}Настройка - Мониторинг Парковки{% endblock %}
+
+{% block content %}
+<div class="card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none;">
+    <h2 style="color: white; margin-bottom: 0.5rem;">🤖 Автоматическая разметка парковочных мест</h2>
+    <p style="margin-bottom: 1rem; opacity: 0.9;">
+        Используйте AI для автоматического определения парковочных мест на основе детекции транспорта.
+        Система проанализирует кадры с камер и предложит создать места там, где стоят машины.
+    </p>
+    <a href="/auto-markup" class="btn" style="background: white; color: #667eea; font-weight: 600;">
+        Запустить авто-разметку →
+    </a>
+</div>
+
+<div class="card">
+    <h2>Управление камерами</h2>
+    <button class="btn btn-success" onclick="showAddCameraForm()">Добавить камеру</button>
+    
+    <div id="add-camera-form" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+        <h3>Добавить новую камеру</h3>
+        <div class="form-group">
+            <label>Название камеры</label>
+            <input type="text" id="camera-name" placeholder="например, Главный вход">
+        </div>
+        <div class="form-group">
+            <label>RTSP URL</label>
+            <input type="text" id="camera-rtsp" placeholder="rtsp://user:pass@192.168.1.100:554/stream">
+        </div>
+        <button class="btn btn-success" onclick="addCamera()">Создать</button>
+        <button class="btn" onclick="hideAddCameraForm()">Отмена</button>
+    </div>
+    
+    <div id="cameras-list" style="margin-top: 1.5rem;"></div>
+</div>
+
+<!-- Модальное окно для выбора exclusion zones -->
+<div id="exclusion-zones-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; overflow: auto;">
+    <div style="max-width: 1200px; margin: 2rem auto; background: white; padding: 2rem; border-radius: 8px;">
+        <h2>Исключённые зоны для камеры: <span id="exclusion-camera-name"></span></h2>
+        <p style="color: #666; margin-bottom: 1rem;">
+            Выберите области на изображении, которые точно не являются парковочными местами 
+            (проезды, тротуары, здания и т.д.). Кликните дважды на изображении для выбора прямоугольной зоны.
+        </p>
+        
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+            <div>
+                <div style="position: relative; border: 2px solid #ddd; background: #f8f9fa;">
+                    <img id="exclusion-zones-image" 
+                         style="max-width: 100%; display: block; cursor: crosshair;"
+                         onclick="handleExclusionZoneClick(event)">
+                    <canvas id="exclusion-zones-canvas" 
+                            style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
+                </div>
+                <div style="margin-top: 0.5rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="exclusion-video-mode" onchange="toggleExclusionVideoMode()" 
+                               style="width: auto; margin-right: 0.5rem;">
+                        <strong>Видеопоток</strong>
+                    </label>
+                </div>
+            </div>
+            
+            <div>
+                <h3>Текущие зоны</h3>
+                <div id="exclusion-zones-list" style="margin-bottom: 1rem; max-height: 400px; overflow-y: auto;"></div>
+                <button class="btn btn-success" onclick="saveExclusionZones()">Сохранить зоны</button>
+                <button class="btn" onclick="closeExclusionZonesModal()" style="margin-left: 0.5rem;">Отмена</button>
+            </div>
+        </div>
+        
+        <div style="color: #666; font-size: 0.9rem;">
+            <strong>Инструкция:</strong> Кликните на изображении для выбора первой точки, затем кликните ещё раз для второй точки. 
+            Зона будет добавлена автоматически. Для удаления зоны нажмите кнопку "Удалить" рядом с зоной.
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Парковочные зоны</h2>
+    <button class="btn btn-success" onclick="showAddSpaceForm()">Добавить зону</button>
+    
+    <div id="add-space-form" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+        <h3>Добавить новую зону</h3>
+        <div class="form-group">
+            <label>Название зоны</label>
+            <input type="text" id="space-name" placeholder="например, Первый этаж">
+        </div>
+        <button class="btn btn-success" onclick="addSpace()">Создать</button>
+        <button class="btn" onclick="hideAddSpaceForm()">Отмена</button>
+    </div>
+    
+    <div id="spaces-list" style="margin-top: 1.5rem;"></div>
+</div>
+
+<div class="card">
+    <h2>Настройка парковочных мест</h2>
+    <p style="margin-bottom: 1rem;">Выберите зону для настройки парковочных мест:</p>
+    
+    <select id="spot-space-select" class="form-control" style="max-width: 400px; margin-bottom: 1rem;">
+        <option value="">Выберите зону...</option>
+    </select>
+    
+    <div id="spot-config" style="display: none;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div>
+                <h3>Добавить парковочное место</h3>
+                <div class="form-group">
+                    <label>Тип</label>
+                    <select id="spot-type">
+                        <option value="parking">Парковка</option>
+                        <option value="nopark">Запрет парковки</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Метка</label>
+                    <input type="text" id="spot-label" placeholder="например, A1">
+                </div>
+                <div class="form-group">
+                    <label>Координаты (x1,y1;x2,y2)</label>
+                    <input type="text" id="spot-coords" placeholder="100,100;200,200">
+                    <small style="color: #666;">Кликните на изображение для получения координат</small>
+                </div>
+                <button class="btn btn-success" onclick="addSpot()">Добавить место</button>
+                
+                <h3 style="margin-top: 1.5rem;">Текущие места</h3>
+                <div id="spots-list"></div>
+            </div>
+            
+            <div>
+                <h3>Вид с камеры</h3>
+                <div style="margin-bottom: 0.5rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="setup-video-mode" onchange="toggleSetupVideoMode()" 
+                               style="width: auto; margin-right: 0.5rem;">
+                        <strong>Видеопоток</strong>
+                    </label>
+                    <small style="color: #666; margin-left: 1.5rem;">
+                        Включите для просмотра в реальном времени (удобнее для разметки)
+                    </small>
+                </div>
+                
+                <div style="position: relative;">
+                    <img id="spot-config-image" src="" alt="Вид с камеры" 
+                         style="width: 100%; border: 1px solid #ddd; cursor: crosshair; display: none;" 
+                         onclick="handleImageClick(event)"
+                         onerror="handleSetupImageError(this)">
+                    <img id="spot-config-video" src="" alt="Видеопоток" 
+                         style="width: 100%; border: 1px solid #ddd; cursor: crosshair; display: none;"
+                         onclick="handleImageClick(event)">
+                    <div id="setup-image-loading" style="display: none; text-align: center; padding: 50px; background: #f5f5f5; border: 1px solid #ddd;">
+                        <p>Загрузка...</p>
+                    </div>
+                    <div id="setup-image-error" style="display: none; text-align: center; padding: 50px; background: #ffe6e6; border: 1px solid #ddd; color: #c00;">
+                        <p>Камера недоступна</p>
+                        <button class="btn" onclick="reloadSetupImage()" style="margin-top: 10px;">Обновить</button>
+                    </div>
+                </div>
+                <p id="click-coords" style="margin-top: 0.5rem; font-family: monospace;"></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+let clickPoint = null;
+let currentSpotSpaceId = null;
+let currentSetupCameraId = null;
+
+function handleSetupImageError(img) {
+    console.error('Failed to load setup image:', img.src);
+    document.getElementById('spot-config-image').style.display = 'none';
+    document.getElementById('setup-image-loading').style.display = 'none';
+    document.getElementById('setup-image-error').style.display = 'block';
+}
+
+function reloadSetupImage() {
+    if (currentSetupCameraId) {
+        loadSetupImage(currentSetupCameraId);
+    }
+}
+
+function toggleSetupVideoMode() {
+    const isVideoMode = document.getElementById('setup-video-mode').checked;
+    
+    if (currentSetupCameraId) {
+        if (isVideoMode) {
+            loadSetupVideo(currentSetupCameraId);
+        } else {
+            loadSetupImage(currentSetupCameraId);
+        }
+    }
+}
+
+function loadSetupVideo(cameraId) {
+    currentSetupCameraId = cameraId;
+    const img = document.getElementById('spot-config-image');
+    const video = document.getElementById('spot-config-video');
+    const loading = document.getElementById('setup-image-loading');
+    const error = document.getElementById('setup-image-error');
+    
+    // Скрыть статичное изображение
+    img.style.display = 'none';
+    error.style.display = 'none';
+    loading.style.display = 'block';
+    
+    // Установить видеопоток
+    video.src = `/api/video/camera/${cameraId}`;
+    
+    // Показать через небольшую задержку
+    setTimeout(() => {
+        loading.style.display = 'none';
+        video.style.display = 'block';
+    }, 500);
+}
+
+function loadSetupImage(cameraId) {
+    currentSetupCameraId = cameraId;
+    const img = document.getElementById('spot-config-image');
+    const video = document.getElementById('spot-config-video');
+    const loading = document.getElementById('setup-image-loading');
+    const error = document.getElementById('setup-image-error');
+    
+    // Скрыть видео
+    video.style.display = 'none';
+    video.src = '';
+    
+    // Show loading
+    img.style.display = 'none';
+    error.style.display = 'none';
+    loading.style.display = 'block';
+    
+    img.onload = function() {
+        loading.style.display = 'none';
+        error.style.display = 'none';
+        img.style.display = 'block';
+    };
+    
+    img.src = `/api/snapshot/camera/${cameraId}?t=${Date.now()}`;
+}
+
+function showAddCameraForm() {
+    document.getElementById('add-camera-form').style.display = 'block';
+}
+
+function hideAddCameraForm() {
+    document.getElementById('add-camera-form').style.display = 'none';
+    document.getElementById('camera-name').value = '';
+    document.getElementById('camera-rtsp').value = '';
+}
+
+async function addCamera() {
+    const name = document.getElementById('camera-name').value;
+    const rtspUrl = document.getElementById('camera-rtsp').value;
+    
+    if (!name || !rtspUrl) {
+        showAlert('Пожалуйста, заполните все поля', 'error');
+        return;
+    }
+    
+    try {
+        await apiRequest('/api/cameras', {
+            method: 'POST',
+            body: JSON.stringify({ name, rtsp_url: rtspUrl })
+        });
+        
+        showAlert('Камера успешно добавлена', 'success');
+        hideAddCameraForm();
+        loadCameras();
+    } catch (error) {
+        showAlert('Ошибка добавления камеры: ' + error.message, 'error');
+    }
+}
+
+async function loadCameras() {
+    try {
+        const data = await apiRequest('/api/cameras');
+        const list = document.getElementById('cameras-list');
+        
+        if (data.cameras.length === 0) {
+            list.innerHTML = '<p>Камеры не настроены.</p>';
+            return;
+        }
+        
+        list.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Название</th>
+                        <th>ID</th>
+                        <th>Статус</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.cameras.map(cam => `
+                        <tr>
+                            <td><strong>${cam.name}</strong></td>
+                            <td><code>${cam.id}</code></td>
+                            <td><span class="status-badge status-online">Активна</span></td>
+                            <td>
+                                <button class="btn" onclick="showExclusionZones('${cam.id}')" style="margin-right: 0.5rem;">Исключённые зоны</button>
+                                <button class="btn btn-danger" onclick="deleteCamera('${cam.id}')">Удалить</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (error) {
+        showAlert('Ошибка загрузки камер: ' + error.message, 'error');
+    }
+}
+
+async function deleteCamera(cameraId) {
+    if (!confirm('Удалить эту камеру?')) return;
+    
+    try {
+        await apiRequest(`/api/cameras/${cameraId}`, { method: 'DELETE' });
+        showAlert('Камера удалена', 'success');
+        loadCameras();
+    } catch (error) {
+        showAlert('Ошибка удаления камеры: ' + error.message, 'error');
+    }
+}
+
+function showAddSpaceForm() {
+    document.getElementById('add-space-form').style.display = 'block';
+}
+
+function hideAddSpaceForm() {
+    document.getElementById('add-space-form').style.display = 'none';
+    document.getElementById('space-name').value = '';
+}
+
+async function addSpace() {
+    const name = document.getElementById('space-name').value;
+    
+    if (!name) {
+        showAlert('Пожалуйста, введите название зоны', 'error');
+        return;
+    }
+    
+    try {
+        await apiRequest('/api/spaces', {
+            method: 'POST',
+            body: JSON.stringify({ name })
+        });
+        
+        showAlert('Зона успешно добавлена', 'success');
+        hideAddSpaceForm();
+        loadSpaces();
+    } catch (error) {
+        showAlert('Ошибка добавления зоны: ' + error.message, 'error');
+    }
+}
+
+async function loadSpaces() {
+    try {
+        const spacesData = await apiRequest('/api/spaces');
+        const camerasData = await apiRequest('/api/cameras');
+        const list = document.getElementById('spaces-list');
+        const select = document.getElementById('spot-space-select');
+        
+        if (spacesData.spaces.length === 0) {
+            list.innerHTML = '<p>Зоны не настроены.</p>';
+            return;
+        }
+        
+        // Update spaces list
+        list.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Название</th>
+                        <th>ID</th>
+                        <th>Камеры</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${spacesData.spaces.map(space => `
+                        <tr>
+                            <td><strong>${space.name}</strong></td>
+                            <td><code>${space.id}</code></td>
+                            <td>
+                                ${space.camera_ids.length > 0 ? space.camera_ids.join(', ') : 'Нет'}
+                                <button class="btn" style="margin-left: 0.5rem;" onclick="showAssignCamera('${space.id}')">Назначить</button>
+                            </td>
+                            <td>
+                                <button class="btn btn-danger" onclick="deleteSpace('${space.id}')">Удалить</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+        
+        // Update select
+        select.innerHTML = '<option value="">Выберите зону...</option>' +
+            spacesData.spaces.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    } catch (error) {
+        showAlert('Ошибка загрузки зон: ' + error.message, 'error');
+    }
+}
+
+async function showAssignCamera(spaceId) {
+    try {
+        const camerasData = await apiRequest('/api/cameras');
+        
+        if (camerasData.cameras.length === 0) {
+            showAlert('Нет доступных камер', 'error');
+            return;
+        }
+        
+        const cameraId = prompt('Введите ID камеры для назначения:\n\n' + 
+            camerasData.cameras.map(c => `${c.id} - ${c.name}`).join('\n'));
+        
+        if (!cameraId) return;
+        
+        await apiRequest(`/api/spaces/${spaceId}/assign_camera`, {
+            method: 'POST',
+            body: JSON.stringify({ camera_id: cameraId })
+        });
+        
+        showAlert('Камера назначена', 'success');
+        loadSpaces();
+    } catch (error) {
+        showAlert('Ошибка назначения камеры: ' + error.message, 'error');
+    }
+}
+
+async function deleteSpace(spaceId) {
+    if (!confirm('Удалить эту зону и все её места?')) return;
+    
+    try {
+        await apiRequest(`/api/spaces/${spaceId}`, { method: 'DELETE' });
+        showAlert('Зона удалена', 'success');
+        loadSpaces();
+    } catch (error) {
+        showAlert('Ошибка удаления зоны: ' + error.message, 'error');
+    }
+}
+
+document.getElementById('spot-space-select').addEventListener('change', async function() {
+    const spaceId = this.value;
+    currentSpotSpaceId = spaceId;
+    
+    if (!spaceId) {
+        document.getElementById('spot-config').style.display = 'none';
+        return;
+    }
+    
+    document.getElementById('spot-config').style.display = 'block';
+    
+    // Load space camera image
+    try {
+        const spaceData = await apiRequest(`/api/spaces/${spaceId}`);
+        
+        if (spaceData.camera_ids && spaceData.camera_ids.length > 0) {
+            const isVideoMode = document.getElementById('setup-video-mode').checked;
+            if (isVideoMode) {
+                loadSetupVideo(spaceData.camera_ids[0]);
+            } else {
+                loadSetupImage(spaceData.camera_ids[0]);
+            }
+        }
+        
+        loadSpots(spaceId);
+    } catch (error) {
+        showAlert('Ошибка загрузки зоны: ' + error.message, 'error');
+    }
+});
+
+async function loadSpots(spaceId) {
+    try {
+        const data = await apiRequest(`/api/spots?space_id=${spaceId}`);
+        const list = document.getElementById('spots-list');
+        
+        if (data.spots.length === 0) {
+            list.innerHTML = '<p>Места не настроены.</p>';
+            return;
+        }
+        
+        list.innerHTML = data.spots.map(spot => `
+            <div style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 0.5rem;">
+                <strong>${spot.label}</strong> (${spot.type === 'parking' ? 'Парковка' : 'Запрет парковки'})
+                <br><small>Координаты: ${spot.rect.x1},${spot.rect.y1};${spot.rect.x2},${spot.rect.y2}</small>
+                <br><button class="btn btn-danger" style="margin-top: 0.5rem;" onclick="deleteSpot('${spot.id}', '${spaceId}')">Удалить</button>
+            </div>
+        `).join('');
+    } catch (error) {
+        showAlert('Ошибка загрузки мест: ' + error.message, 'error');
+    }
+}
+
+function handleImageClick(event) {
+    const target = event.target;
+    const rect = target.getBoundingClientRect();
+    const x = Math.round((event.clientX - rect.left) * (target.naturalWidth / target.width));
+    const y = Math.round((event.clientY - rect.top) * (target.naturalHeight / target.height));
+    
+    if (!clickPoint) {
+        clickPoint = { x, y };
+        document.getElementById('click-coords').textContent = `Первая точка: ${x},${y} - Кликните ещё раз для второй точки`;
+    } else {
+        const coords = `${clickPoint.x},${clickPoint.y};${x},${y}`;
+        document.getElementById('spot-coords').value = coords;
+        document.getElementById('click-coords').textContent = `Выбрано: ${coords}`;
+        clickPoint = null;
+    }
+}
+
+async function addSpot() {
+    if (!currentSpotSpaceId) return;
+    
+    const type = document.getElementById('spot-type').value;
+    const label = document.getElementById('spot-label').value;
+    const coords = document.getElementById('spot-coords').value;
+    
+    if (!label || !coords) {
+        showAlert('Пожалуйста, заполните все поля', 'error');
+        return;
+    }
+    
+    try {
+        // Parse coords
+        const [p1, p2] = coords.split(';');
+        const [x1, y1] = p1.split(',').map(Number);
+        const [x2, y2] = p2.split(',').map(Number);
+        
+        await apiRequest('/api/spots', {
+            method: 'POST',
+            body: JSON.stringify({
+                space_id: currentSpotSpaceId,
+                type,
+                label,
+                rect: { x1, y1, x2, y2 }
+            })
+        });
+        
+        showAlert('Место успешно добавлено', 'success');
+        document.getElementById('spot-label').value = '';
+        document.getElementById('spot-coords').value = '';
+        loadSpots(currentSpotSpaceId);
+    } catch (error) {
+        showAlert('Ошибка добавления места: ' + error.message, 'error');
+    }
+}
+
+async function deleteSpot(spotId, spaceId) {
+    if (!confirm('Удалить это место?')) return;
+    
+    try {
+        await apiRequest(`/api/spots/${spotId}`, { method: 'DELETE' });
+        showAlert('Место удалено', 'success');
+        loadSpots(spaceId);
+    } catch (error) {
+        showAlert('Ошибка удаления места: ' + error.message, 'error');
+    }
+}
+
+// Exclusion zones management
+let currentExclusionCameraId = null;
+let exclusionZones = [];
+let exclusionClickPoint = null;
+let exclusionVideoInterval = null;
+
+async function showExclusionZones(cameraId) {
+    currentExclusionCameraId = cameraId;
+    exclusionZones = [];
+    exclusionClickPoint = null;
+    
+    // Получить информацию о камере
+    try {
+        const camera = await apiRequest(`/api/cameras/${cameraId}`);
+        document.getElementById('exclusion-camera-name').textContent = camera.name;
+        exclusionZones = camera.exclusion_zones || [];
+    } catch (error) {
+        showAlert('Ошибка загрузки камеры: ' + error.message, 'error');
+        return;
+    }
+    
+    // Показать модальное окно
+    document.getElementById('exclusion-zones-modal').style.display = 'block';
+    
+    // Загрузить изображение
+    loadExclusionZonesImage();
+    renderExclusionZonesList();
+    drawExclusionZones();
+}
+
+function closeExclusionZonesModal() {
+    document.getElementById('exclusion-zones-modal').style.display = 'none';
+    if (exclusionVideoInterval) {
+        clearInterval(exclusionVideoInterval);
+        exclusionVideoInterval = null;
+    }
+    currentExclusionCameraId = null;
+    exclusionZones = [];
+    exclusionClickPoint = null;
+}
+
+function loadExclusionZonesImage() {
+    const img = document.getElementById('exclusion-zones-image');
+    const videoMode = document.getElementById('exclusion-video-mode').checked;
+    
+    if (videoMode) {
+        loadExclusionZonesVideo();
+    } else {
+        if (exclusionVideoInterval) {
+            clearInterval(exclusionVideoInterval);
+            exclusionVideoInterval = null;
+        }
+        img.src = `/api/snapshot/camera/${currentExclusionCameraId}?t=${Date.now()}`;
+    }
+}
+
+function loadExclusionZonesVideo() {
+    const img = document.getElementById('exclusion-zones-image');
+    if (exclusionVideoInterval) {
+        clearInterval(exclusionVideoInterval);
+    }
+    
+    // Загрузить первое изображение сразу
+    img.src = `/api/snapshot/camera/${currentExclusionCameraId}?t=${Date.now()}`;
+    
+    // Затем обновлять каждую секунду
+    exclusionVideoInterval = setInterval(() => {
+        img.src = `/api/snapshot/camera/${currentExclusionCameraId}?t=${Date.now()}`;
+    }, 1000);
+}
+
+function toggleExclusionVideoMode() {
+    const videoMode = document.getElementById('exclusion-video-mode').checked;
+    if (videoMode) {
+        loadExclusionZonesVideo();
+    } else {
+        if (exclusionVideoInterval) {
+            clearInterval(exclusionVideoInterval);
+            exclusionVideoInterval = null;
+        }
+        loadExclusionZonesImage();
+    }
+}
+
+function handleExclusionZoneClick(event) {
+    const target = event.target;
+    const rect = target.getBoundingClientRect();
+    const x = Math.round((event.clientX - rect.left) * (target.naturalWidth / target.width));
+    const y = Math.round((event.clientY - rect.top) * (target.naturalHeight / target.height));
+    
+    if (!exclusionClickPoint) {
+        exclusionClickPoint = { x, y };
+    } else {
+        // Создать зону
+        const zone = {
+            x1: Math.min(exclusionClickPoint.x, x),
+            y1: Math.min(exclusionClickPoint.y, y),
+            x2: Math.max(exclusionClickPoint.x, x),
+            y2: Math.max(exclusionClickPoint.y, y)
+        };
+        
+        exclusionZones.push(zone);
+        exclusionClickPoint = null;
+        
+        renderExclusionZonesList();
+        drawExclusionZones();
+    }
+}
+
+function removeExclusionZone(index) {
+    exclusionZones.splice(index, 1);
+    renderExclusionZonesList();
+    drawExclusionZones();
+}
+
+function renderExclusionZonesList() {
+    const list = document.getElementById('exclusion-zones-list');
+    
+    if (exclusionZones.length === 0) {
+        list.innerHTML = '<p style="color: #666;">Нет исключённых зон</p>';
+        return;
+    }
+    
+    list.innerHTML = exclusionZones.map((zone, index) => `
+        <div style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 0.5rem;">
+            <div style="font-size: 0.9rem;">
+                <strong>Зона ${index + 1}</strong><br>
+                (${zone.x1}, ${zone.y1}) - (${zone.x2}, ${zone.y2})
+            </div>
+            <button class="btn btn-danger" style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.25rem 0.5rem;" 
+                    onclick="removeExclusionZone(${index})">Удалить</button>
+        </div>
+    `).join('');
+}
+
+function drawExclusionZones() {
+    const img = document.getElementById('exclusion-zones-image');
+    const canvas = document.getElementById('exclusion-zones-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    if (!img.complete || img.naturalWidth === 0) {
+        return;
+    }
+    
+    // Установить размеры canvas
+    canvas.width = img.width;
+    canvas.height = img.height;
+    
+    // Очистить canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Нарисовать зоны
+    const scaleX = img.width / img.naturalWidth;
+    const scaleY = img.height / img.naturalHeight;
+    
+    exclusionZones.forEach((zone, index) => {
+        const x1 = zone.x1 * scaleX;
+        const y1 = zone.y1 * scaleY;
+        const x2 = zone.x2 * scaleX;
+        const y2 = zone.y2 * scaleY;
+        
+        // Красная полупрозрачная заливка
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        
+        // Красная рамка
+        ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        
+        // Номер зоны
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText(`${index + 1}`, x1 + 5, y1 + 18);
+    });
+    
+    // Нарисовать точку выбора, если есть
+    if (exclusionClickPoint) {
+        const x = exclusionClickPoint.x * scaleX;
+        const y = exclusionClickPoint.y * scaleY;
+        
+        ctx.fillStyle = 'rgba(0, 150, 255, 0.8)';
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+}
+
+// Обновлять canvas при загрузке изображения
+document.getElementById('exclusion-zones-image').addEventListener('load', drawExclusionZones);
+
+async function saveExclusionZones() {
+    if (!currentExclusionCameraId) return;
+    
+    try {
+        await apiRequest(`/api/cameras/${currentExclusionCameraId}/exclusion-zones`, {
+            method: 'PUT',
+            body: JSON.stringify({ exclusion_zones: exclusionZones })
+        });
+        
+        showAlert('Исключённые зоны сохранены', 'success');
+        closeExclusionZonesModal();
+        loadCameras();
+    } catch (error) {
+        showAlert('Ошибка сохранения зон: ' + error.message, 'error');
+    }
+}
+
+// Initial load
+loadCameras();
+loadSpaces();
+</script>
+
+<div class="card">
+    <h2>План парковки вид сверху</h2>
+    <p style="margin-bottom: 1rem;">Загрузите план парковки и привяжите парковочные места к координатам на плане:</p>
+    
+    <select id="plan-space-select" class="form-control" style="max-width: 400px; margin-bottom: 1rem;">
+        <option value="">Выберите зону...</option>
+    </select>
+    
+    <div id="plan-config" style="display: none;">
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+            <div>
+                <h3>План парковки</h3>
+                <div style="margin-bottom: 1rem;">
+                    <input type="file" id="plan-image-input" accept="image/*" style="margin-bottom: 0.5rem;">
+                    <button class="btn btn-success" onclick="uploadPlanImage()">Загрузить план</button>
+                </div>
+                
+                <div style="position: relative; border: 2px solid #ddd; background: #f8f9fa; min-height: 400px;">
+                    <img id="plan-image" src="" alt="План парковки" style="max-width: 100%; display: none;">
+                    <canvas id="plan-canvas" style="position: absolute; top: 0; left: 0; cursor: crosshair; display: none;"></canvas>
+                    <div id="plan-placeholder" style="text-align: center; padding: 100px; color: #666;">
+                        <p>Загрузите изображение плана парковки</p>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 1rem;">
+                    <button class="btn" onclick="enablePlanEditMode()" id="edit-plan-btn" style="display: none;">Режим редактирования</button>
+                    <button class="btn btn-success" onclick="savePlanMappings()" id="save-plan-btn" style="display: none;">Сохранить привязки</button>
+                    <button class="btn" onclick="cancelPlanEdit()" id="cancel-plan-btn" style="display: none;">Отмена</button>
+                </div>
+            </div>
+            
+            <div>
+                <h3>Парковочные места</h3>
+                <div id="plan-spots-list" style="max-height: 400px; overflow-y: auto;"></div>
+                <div style="margin-top: 1rem;">
+                    <button class="btn" onclick="startCameraMapping()" id="camera-mapping-btn" style="display: none;">
+                        Сопоставить с камерой
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentPlanSpaceId = null;
+let planSpots = [];
+let planMappings = [];
+let planEditMode = false;
+let draggedSpot = null;
+let planImageLoaded = false;
+
+// Load spaces for plan selector
+async function loadPlanSpaces() {
+    try {
+        const data = await apiRequest('/api/spaces');
+        const select = document.getElementById('plan-space-select');
+        select.innerHTML = '<option value="">Выберите зону...</option>' +
+            data.spaces.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    } catch (error) {
+        showAlert('Ошибка загрузки зон: ' + error.message, 'error');
+    }
+}
+
+document.getElementById('plan-space-select').addEventListener('change', async function() {
+    const spaceId = this.value;
+    if (spaceId) {
+        await loadPlanConfig(spaceId);
+    } else {
+        document.getElementById('plan-config').style.display = 'none';
+        currentPlanSpaceId = null;
+    }
+});
+
+async function loadPlanConfig(spaceId) {
+    currentPlanSpaceId = spaceId;
+    document.getElementById('plan-config').style.display = 'block';
+    
+    try {
+        // Load plan data
+        const planData = await apiRequest(`/api/spaces/${spaceId}/top-view-plan`);
+        
+        // Load spots for this space
+        const spotsData = await apiRequest(`/api/spots?space_id=${spaceId}`);
+        planSpots = spotsData.spots.filter(s => s.type === 'parking');
+        
+        // Load existing mappings
+        planMappings = planData.top_view_spots || [];
+        
+        // Display plan image if exists
+        if (planData.top_view_image) {
+            const img = document.getElementById('plan-image');
+            img.src = `/api/spaces/${spaceId}/top-view-plan/image?t=${Date.now()}`;
+            img.style.display = 'block';
+            img.onload = () => {
+                planImageLoaded = true;
+                initializePlanCanvas();
+            };
+            document.getElementById('plan-placeholder').style.display = 'none';
+            document.getElementById('edit-plan-btn').style.display = 'inline-block';
+        } else {
+            document.getElementById('plan-image').style.display = 'none';
+            document.getElementById('plan-placeholder').style.display = 'block';
+            document.getElementById('edit-plan-btn').style.display = 'none';
+        }
+        
+        updatePlanSpotsList();
+        drawPlanSpots();
+    } catch (error) {
+        if (error.message.includes('404')) {
+            // Plan doesn't exist yet, show upload form
+            document.getElementById('plan-image').style.display = 'none';
+            document.getElementById('plan-placeholder').style.display = 'block';
+        } else {
+            showAlert('Ошибка загрузки плана: ' + error.message, 'error');
+        }
+    }
+}
+
+async function uploadPlanImage() {
+    const input = document.getElementById('plan-image-input');
+    const file = input.files[0];
+    
+    if (!file || !currentPlanSpaceId) {
+        showAlert('Выберите файл и зону', 'error');
+        return;
+    }
+    
+    try {
+        const formData = new FormData();
+        formData.append('image', file);
+        
+        const response = await fetch(`/api/spaces/${currentPlanSpaceId}/top-view-plan`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Upload failed');
+        }
+        
+        showAlert('План загружен', 'success');
+        await loadPlanConfig(currentPlanSpaceId);
+    } catch (error) {
+        showAlert('Ошибка загрузки плана: ' + error.message, 'error');
+    }
+}
+
+function initializePlanCanvas() {
+    const img = document.getElementById('plan-image');
+    const canvas = document.getElementById('plan-canvas');
+    
+    if (!img.complete || img.naturalWidth === 0) return;
+    
+    canvas.width = img.offsetWidth;
+    canvas.height = img.offsetHeight;
+    canvas.style.width = img.style.width || '100%';
+    canvas.style.height = 'auto';
+    
+    drawPlanSpots();
+}
+
+function drawPlanSpots() {
+    if (!planImageLoaded || !currentPlanSpaceId) return;
+    
+    const canvas = document.getElementById('plan-canvas');
+    const ctx = canvas.getContext('2d');
+    const img = document.getElementById('plan-image');
+    
+    if (!img.complete) return;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Get image dimensions
+    const imgWidth = img.naturalWidth;
+    const imgHeight = img.naturalHeight;
+    const scaleX = canvas.width / imgWidth;
+    const scaleY = canvas.height / imgHeight;
+    
+    // Draw spots
+    planMappings.forEach(mapping => {
+        const spot = planSpots.find(s => s.id === mapping.spot_id);
+        if (!spot) return;
+        
+        const x = mapping.plan_coords.x * imgWidth * scaleX;
+        const y = mapping.plan_coords.y * imgHeight * scaleY;
+        
+        // Draw rectangle (simplified - assume standard size)
+        const width = 60 * scaleX;
+        const height = 100 * scaleY;
+        
+        ctx.strokeStyle = '#2196F3';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x - width/2, y - height/2, width, height);
+        
+        // Draw label
+        ctx.fillStyle = '#2196F3';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(spot.label, x, y - height/2 - 5);
+    });
+}
+
+function updatePlanSpotsList() {
+    const list = document.getElementById('plan-spots-list');
+    
+    if (planSpots.length === 0) {
+        list.innerHTML = '<p>Нет парковочных мест в этой зоне</p>';
+        return;
+    }
+    
+    list.innerHTML = planSpots.map(spot => {
+        const mapping = planMappings.find(m => m.spot_id === spot.id);
+        const hasMapping = !!mapping;
+        
+        return `
+            <div style="padding: 0.5rem; border: 1px solid #ddd; margin-bottom: 0.5rem; border-radius: 4px;
+                        background: ${hasMapping ? '#e8f5e9' : '#fff'};">
+                <strong>${spot.label}</strong>
+                ${hasMapping ? '<span style="color: green;">✓ Привязано</span>' : '<span style="color: #666;">Не привязано</span>'}
+            </div>
+        `;
+    }).join('');
+}
+
+function enablePlanEditMode() {
+    planEditMode = true;
+    const canvas = document.getElementById('plan-canvas');
+    canvas.style.display = 'block';
+    canvas.style.pointerEvents = 'auto';
+    
+    document.getElementById('edit-plan-btn').style.display = 'none';
+    document.getElementById('save-plan-btn').style.display = 'inline-block';
+    document.getElementById('cancel-plan-btn').style.display = 'inline-block';
+    document.getElementById('camera-mapping-btn').style.display = 'inline-block';
+    
+    // Add click handler for placing spots
+    canvas.addEventListener('click', handlePlanCanvasClick);
+}
+
+function handlePlanCanvasClick(event) {
+    if (!planEditMode) return;
+    
+    const canvas = document.getElementById('plan-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    const img = document.getElementById('plan-image');
+    const imgWidth = img.naturalWidth;
+    const imgHeight = img.naturalHeight;
+    const scaleX = canvas.width / imgWidth;
+    const scaleY = canvas.height / imgHeight;
+    
+    // Normalize coordinates (0-1)
+    const normalizedX = (x / scaleX) / imgWidth;
+    const normalizedY = (y / scaleY) / imgHeight;
+    
+    // For now, map to first unassigned spot
+    const unassignedSpot = planSpots.find(spot => 
+        !planMappings.find(m => m.spot_id === spot.id)
+    );
+    
+    if (unassignedSpot) {
+        // Create or update mapping
+        const existing = planMappings.find(m => m.spot_id === unassignedSpot.id);
+        if (existing) {
+            existing.plan_coords = { x: normalizedX, y: normalizedY };
+        } else {
+            planMappings.push({
+                spot_id: unassignedSpot.id,
+                plan_coords: { x: normalizedX, y: normalizedY },
+                rotation: 0
+            });
+        }
+        
+        drawPlanSpots();
+        updatePlanSpotsList();
+    }
+}
+
+function cancelPlanEdit() {
+    planEditMode = false;
+    const canvas = document.getElementById('plan-canvas');
+    canvas.style.pointerEvents = 'none';
+    
+    document.getElementById('edit-plan-btn').style.display = 'inline-block';
+    document.getElementById('save-plan-btn').style.display = 'none';
+    document.getElementById('cancel-plan-btn').style.display = 'none';
+    
+    // Reload to reset changes
+    if (currentPlanSpaceId) {
+        loadPlanConfig(currentPlanSpaceId);
+    }
+}
+
+async function savePlanMappings() {
+    if (!currentPlanSpaceId) return;
+    
+    try {
+        await apiRequest(`/api/spaces/${currentPlanSpaceId}/top-view-plan/spots`, {
+            method: 'PUT',
+            body: JSON.stringify({ top_view_spots: planMappings })
+        });
+        
+        showAlert('Привязки сохранены', 'success');
+        cancelPlanEdit();
+    } catch (error) {
+        showAlert('Ошибка сохранения: ' + error.message, 'error');
+    }
+}
+
+function startCameraMapping() {
+    if (!currentPlanSpaceId) {
+        showAlert('Выберите зону', 'error');
+        return;
+    }
+    
+    // Show mapping modal
+    showCameraMappingModal();
+}
+
+function showCameraMappingModal() {
+    // Create modal if doesn't exist
+    let modal = document.getElementById('camera-mapping-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'camera-mapping-modal';
+        modal.style.cssText = 'display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; overflow: auto;';
+        modal.innerHTML = `
+            <div style="max-width: 1400px; margin: 2rem auto; background: white; padding: 2rem; border-radius: 8px;">
+                <h2>Сопоставление плана с камерой</h2>
+                <p style="color: #666; margin-bottom: 1rem;">
+                    Кликните на 4 точки на плане, затем на соответствующие точки на видео с камеры для создания матрицы преобразования.
+                </p>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1rem;">
+                    <div>
+                        <h3>План парковки</h3>
+                        <div style="position: relative; border: 2px solid #ddd;">
+                            <img id="mapping-plan-image" src="" style="max-width: 100%;">
+                            <canvas id="mapping-plan-canvas" style="position: absolute; top: 0; left: 0; cursor: crosshair;"></canvas>
+                        </div>
+                        <p id="mapping-plan-status" style="margin-top: 0.5rem; color: #666;">Кликните на 4 точки на плане</p>
+                    </div>
+                    
+                    <div>
+                        <h3>Вид с камеры</h3>
+                        <select id="mapping-camera-select" class="form-control" style="margin-bottom: 0.5rem;"></select>
+                        <div style="position: relative; border: 2px solid #ddd;">
+                            <img id="mapping-camera-image" src="" style="max-width: 100%; display: none;">
+                            <video id="mapping-camera-video" src="" style="max-width: 100%; display: none;"></video>
+                            <canvas id="mapping-camera-canvas" style="position: absolute; top: 0; left: 0; cursor: crosshair; display: none;"></canvas>
+                            <div id="mapping-camera-placeholder" style="text-align: center; padding: 50px; color: #666;">
+                                Выберите камеру
+                            </div>
+                        </div>
+                        <p id="mapping-camera-status" style="margin-top: 0.5rem; color: #666;">Кликните на 4 точки на видео</p>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 1rem;">
+                    <button class="btn btn-success" onclick="applyCameraMapping()" id="apply-mapping-btn" style="display: none;">
+                        Применить преобразование
+                    </button>
+                    <button class="btn" onclick="closeCameraMappingModal()">Отмена</button>
+                    <button class="btn" onclick="resetCameraMapping()" style="margin-left: 0.5rem;">Сбросить</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    
+    modal.style.display = 'block';
+    initializeCameraMapping();
+}
+
+let mappingPlanPoints = [];
+let mappingCameraPoints = [];
+let mappingCameraId = null;
+
+async function initializeCameraMapping() {
+    mappingPlanPoints = [];
+    mappingCameraPoints = [];
+    
+    // Load plan image
+    const planImg = document.getElementById('mapping-plan-image');
+    if (currentPlanSpaceId) {
+        try {
+            const planData = await apiRequest(`/api/spaces/${currentPlanSpaceId}/top-view-plan`);
+            if (planData.top_view_image) {
+                planImg.src = `/api/spaces/${currentPlanSpaceId}/top-view-plan/image?t=${Date.now()}`;
+                planImg.onload = () => {
+                    const canvas = document.getElementById('mapping-plan-canvas');
+                    canvas.width = planImg.offsetWidth;
+                    canvas.height = planImg.offsetHeight;
+                    canvas.style.width = '100%';
+                    canvas.style.height = 'auto';
+                    
+                    canvas.addEventListener('click', handleMappingPlanClick);
+                };
+            }
+        } catch (error) {
+            console.error('Error loading plan:', error);
+        }
+    }
+    
+    // Load cameras
+    try {
+        const spacesData = await apiRequest(`/api/spaces`);
+        const space = spacesData.spaces.find(s => s.id === currentPlanSpaceId);
+        if (space && space.camera_ids && space.camera_ids.length > 0) {
+            const camerasData = await apiRequest('/api/cameras');
+            const select = document.getElementById('mapping-camera-select');
+            select.innerHTML = space.camera_ids.map(camId => {
+                const cam = camerasData.cameras.find(c => c.id === camId);
+                return `<option value="${camId}">${cam ? cam.name : camId}</option>`;
+            }).join('');
+            
+            select.addEventListener('change', loadMappingCamera);
+            if (space.camera_ids.length > 0) {
+                select.value = space.camera_ids[0];
+                loadMappingCamera();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading cameras:', error);
+    }
+}
+
+function handleMappingPlanClick(event) {
+    if (mappingPlanPoints.length >= 4) return;
+    
+    const canvas = document.getElementById('mapping-plan-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    mappingPlanPoints.push({ x, y });
+    
+    // Draw point
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillText(`${mappingPlanPoints.length}`, x + 8, y - 8);
+    
+    document.getElementById('mapping-plan-status').textContent = 
+        `Точка ${mappingPlanPoints.length}/4 выбрана. ${mappingPlanPoints.length < 4 ? 'Выберите следующую точку.' : 'Теперь выберите точки на видео.'}`;
+    
+    if (mappingPlanPoints.length === 4 && mappingCameraPoints.length === 4) {
+        document.getElementById('apply-mapping-btn').style.display = 'inline-block';
+    }
+}
+
+function loadMappingCamera() {
+    const select = document.getElementById('mapping-camera-select');
+    mappingCameraId = select.value;
+    
+    if (!mappingCameraId) return;
+    
+    const img = document.getElementById('mapping-camera-image');
+    const video = document.getElementById('mapping-camera-video');
+    const canvas = document.getElementById('mapping-camera-canvas');
+    const placeholder = document.getElementById('mapping-camera-placeholder');
+    
+    // Use video stream
+    video.src = `/api/video/camera/${mappingCameraId}`;
+    video.style.display = 'block';
+    img.style.display = 'none';
+    placeholder.style.display = 'none';
+    
+    video.onloadeddata = () => {
+        canvas.width = video.offsetWidth;
+        canvas.height = video.offsetHeight;
+        canvas.style.width = '100%';
+        canvas.style.height = 'auto';
+        canvas.style.display = 'block';
+        
+        canvas.addEventListener('click', handleMappingCameraClick);
+    };
+}
+
+function handleMappingCameraClick(event) {
+    if (mappingCameraPoints.length >= 4) return;
+    
+    const canvas = document.getElementById('mapping-camera-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    mappingCameraPoints.push({ x, y });
+    
+    // Draw point
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#00FF00';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillText(`${mappingCameraPoints.length}`, x + 8, y - 8);
+    
+    document.getElementById('mapping-camera-status').textContent = 
+        `Точка ${mappingCameraPoints.length}/4 выбрана. ${mappingCameraPoints.length < 4 ? 'Выберите следующую точку.' : 'Готово к применению.'}`;
+    
+    if (mappingPlanPoints.length === 4 && mappingCameraPoints.length === 4) {
+        document.getElementById('apply-mapping-btn').style.display = 'inline-block';
+    }
+}
+
+async function applyCameraMapping() {
+    if (mappingPlanPoints.length !== 4 || mappingCameraPoints.length !== 4) {
+        showAlert('Выберите 4 точки на плане и 4 точки на видео', 'error');
+        return;
+    }
+    
+    // Calculate homography matrix (simplified - using basic transformation)
+    // For production, use proper homography calculation library
+    try {
+        // Get plan and camera image dimensions for normalization
+        const planImg = document.getElementById('mapping-plan-image');
+        const cameraVideo = document.getElementById('mapping-camera-video');
+        
+        // Normalize coordinates (0-1)
+        const planPoints = mappingPlanPoints.map(p => ({
+            x: p.x / planImg.offsetWidth,
+            y: p.y / planImg.offsetHeight
+        }));
+        
+        const cameraPoints = mappingCameraPoints.map(p => ({
+            x: p.x / cameraVideo.offsetWidth,
+            y: p.y / cameraVideo.offsetHeight
+        }));
+        
+        // Store transformation data (simplified - store point pairs)
+        // In production, calculate and store homography matrix
+        const transformation = {
+            plan_points: planPoints,
+            camera_points: cameraPoints,
+            camera_id: mappingCameraId
+        };
+        
+        // Save transformation to space
+        const spacesData = await apiRequest('/api/spaces');
+        const space = spacesData.spaces.find(s => s.id === currentPlanSpaceId);
+        if (space) {
+            if (!space.top_view_plan) {
+                space.top_view_plan = {};
+            }
+            space.top_view_plan.transformation = transformation;
+            
+            await apiRequest(`/api/spaces/${currentPlanSpaceId}`, {
+                method: 'PUT',
+                body: JSON.stringify(space)
+            });
+        }
+        
+        showAlert('Преобразование сохранено. Теперь можно автоматически вычислять координаты мест на плане из координат на видео.', 'success');
+        closeCameraMappingModal();
+    } catch (error) {
+        showAlert('Ошибка применения преобразования: ' + error.message, 'error');
+    }
+}
+
+function resetCameraMapping() {
+    mappingPlanPoints = [];
+    mappingCameraPoints = [];
+    
+    const planCanvas = document.getElementById('mapping-plan-canvas');
+    const cameraCanvas = document.getElementById('mapping-camera-canvas');
+    
+    const planCtx = planCanvas.getContext('2d');
+    const cameraCtx = cameraCanvas.getContext('2d');
+    
+    planCtx.clearRect(0, 0, planCanvas.width, planCanvas.height);
+    cameraCtx.clearRect(0, 0, cameraCanvas.width, cameraCanvas.height);
+    
+    document.getElementById('mapping-plan-status').textContent = 'Кликните на 4 точки на плане';
+    document.getElementById('mapping-camera-status').textContent = 'Кликните на 4 точки на видео';
+    document.getElementById('apply-mapping-btn').style.display = 'none';
+}
+
+function closeCameraMappingModal() {
+    const modal = document.getElementById('camera-mapping-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+// Update plan spaces when spaces are loaded
+const originalLoadSpaces = window.loadSpaces;
+if (originalLoadSpaces) {
+    window.loadSpaces = async function() {
+        await originalLoadSpaces();
+        await loadPlanSpaces();
+    };
+} else {
+    loadPlanSpaces();
+}
+</script>
+{% endblock %}
+

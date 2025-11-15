@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Главная - Мониторинг Парковки{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Добро пожаловать в Систему Мониторинга Парковки</h2>
+    <p style="margin-bottom: 1.5rem;">
+        Комплексное решение для мониторинга парковочных мест с использованием компьютерного зрения и интеграции с Telegram.
+    </p>
+    
+    <div class="grid">
+        <div class="card" style="margin: 0;">
+            <h3 style="margin-bottom: 0.5rem;">📊 Панель управления</h3>
+            <p style="margin-bottom: 1rem;">Просмотр статуса парковки и статистики в реальном времени</p>
+            <a href="/dashboard" class="btn">Открыть панель</a>
+        </div>
+        
+        <div class="card" style="margin: 0;">
+            <h3 style="margin-bottom: 0.5rem;">⚙️ Настройка</h3>
+            <p style="margin-bottom: 1rem;">Настройка камер, парковочных зон и мест</p>
+            <a href="/setup" class="btn">Настроить систему</a>
+        </div>
+        
+        <div class="card" style="margin: 0;">
+            <h3 style="margin-bottom: 0.5rem;">🔧 Конфигурация</h3>
+            <p style="margin-bottom: 1rem;">Управление настройками бота, стримингом и параметрами</p>
+            <a href="/config" class="btn">Конфигурация системы</a>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Возможности</h2>
+    <ul style="line-height: 1.8;">
+        <li>📹 Поддержка RTSP камер с автоматическим переподключением</li>
+        <li>🤖 Детекция транспортных средств с помощью YOLOv8/v12</li>
+        <li>⏱️ Определение занятости на основе таймера</li>
+        <li>📱 Интеграция с Telegram ботом для удалённого мониторинга</li>
+        <li>🎥 RTMP стриминг в группы/каналы Telegram</li>
+        <li>🌐 Веб-панель в реальном времени с обновлениями SSE</li>
+        <li>💾 Хранение данных в JSON (база данных не требуется)</li>
+        <li>🖥️ Кросс-платформенность (Windows + Linux)</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h2>Быстрый старт</h2>
+    <ol style="line-height: 1.8;">
+        <li>Перейдите в раздел <strong>Настройка</strong> для добавления камер и парковочных зон</li>
+        <li>Определите парковочные места на изображениях с камер</li>
+        <li>Настройте Telegram бот в разделе <strong>Конфигурация</strong></li>
+        <li>Отслеживайте статус парковки через <strong>Панель управления</strong> или Telegram</li>
+    </ol>
+</div>
+
+<div class="card">
+    <h2>Статус системы</h2>
+    <div id="status">Загрузка...</div>
+</div>
+
+<script>
+async function loadStatus() {
+    try {
+        const state = await apiRequest('/api/state');
+        const config = await apiRequest('/api/config');
+        
+        const totalSpaces = state.spaces.length;
+        const totalSpots = state.spaces.reduce((sum, s) => sum + s.total_spots, 0);
+        const occupiedSpots = state.spaces.reduce((sum, s) => sum + s.occupied_spots, 0);
+        
+        document.getElementById('status').innerHTML = `
+            <p><strong>Парковочных зон:</strong> ${totalSpaces}</p>
+            <p><strong>Всего мест:</strong> ${totalSpots}</p>
+            <p><strong>Занято:</strong> ${occupiedSpots}</p>
+            <p><strong>Свободно:</strong> ${totalSpots - occupiedSpots}</p>
+            <p><strong>Статус бота:</strong> ${config.bot_token ? '✅ Настроен' : '❌ Не настроен'}</p>
+        `;
+    } catch (error) {
+        document.getElementById('status').innerHTML = `<p style="color: #e74c3c;">Ошибка загрузки статуса</p>`;
+    }
+}
+
+loadStatus();
+setInterval(loadStatus, 5000);
+</script>
+{% endblock %}
+
