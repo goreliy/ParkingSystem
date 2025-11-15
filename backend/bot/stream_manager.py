@@ -17,13 +17,35 @@ logger = logging.getLogger(__name__)
 class StreamManager:
     """Manages FFmpeg RTMP streaming with single-stream lock."""
     
-    def __init__(self, store, state_manager):
+    def __init__(self, store, state_manager, ffmpeg_manager=None):
         self.store = store
         self.state_manager = state_manager
+        self.ffmpeg_manager = ffmpeg_manager
         self.process: Optional[subprocess.Popen] = None
         self.lock = threading.Lock()
         self.watchdog_thread: Optional[threading.Thread] = None
         self.watchdog_running = False
+        
+        # Ensure FFmpeg is available on startup
+        self._ensure_ffmpeg()
+    
+    def _ensure_ffmpeg(self):
+        """Ensure FFmpeg is available and update config if needed."""
+        if not self.ffmpeg_manager:
+            return
+        
+        try:
+            ffmpeg_path = self.ffmpeg_manager.ensure_ffmpeg(auto_download=True)
+            if ffmpeg_path:
+                # Update config with found path
+                config = self.store.get_config()
+                streaming_config = config.get('streaming', {})
+                if streaming_config.get('ffmpeg_path', 'ffmpeg') == 'ffmpeg':
+                    streaming_config['ffmpeg_path'] = ffmpeg_path
+                    self.store.update_config({'streaming': streaming_config})
+                    logger.info(f"Updated FFmpeg path in config: {ffmpeg_path}")
+        except Exception as e:
+            logger.warning(f"Could not ensure FFmpeg: {e}")
     
     def is_stream_active(self) -> bool:
         """Check if a stream is currently active."""
@@ -69,9 +91,19 @@ class StreamManager:
             # Get FFmpeg path
             ffmpeg_path = streaming_config.get('ffmpeg_path', 'ffmpeg')
             
-            # Check if ffmpeg exists
+            # Try to find FFmpeg if not found
             if not shutil.which(ffmpeg_path):
-                return False, f"FFmpeg not found at: {ffmpeg_path}"
+                if self.ffmpeg_manager:
+                    found_path = self.ffmpeg_manager.ensure_ffmpeg(auto_download=True)
+                    if found_path:
+                        ffmpeg_path = found_path
+                        # Update config
+                        streaming_config['ffmpeg_path'] = ffmpeg_path
+                        self.store.update_config({'streaming': streaming_config})
+                    else:
+                        return False, "FFmpeg не найден. Попробуйте установить вручную или перезапустите приложение для автоматической загрузки."
+                else:
+                    return False, f"FFmpeg not found at: {ffmpeg_path}"
             
             # Build RTMP URL
             rtmp_url = target['rtmp_url']

@@ -110,7 +110,12 @@ class ParkingMonitorApp:
         self.detector = Detector(model_path=model_path, 
                                 confidence_threshold=config.get('confidence_threshold', 0.5))
         self.state_manager = StateManager(self.store)
-        self.stream_manager = StreamManager(self.store, self.state_manager)
+        
+        # Initialize FFmpeg manager
+        from backend.services.ffmpeg_manager import FFmpegManager
+        self.ffmpeg_manager = FFmpegManager(root_dir=Path(__file__).parent.parent)
+        
+        self.stream_manager = StreamManager(self.store, self.state_manager, self.ffmpeg_manager)
         self.auto_markup_service = AutoMarkupService(
             self.store, self.video_manager, self.detector
         )
